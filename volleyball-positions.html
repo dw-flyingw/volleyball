@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Volleyball Overlap Trainer</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+<style>
+  :root{
+    --bg:#0f172a; --panel:#1e293b; --ink:#e2e8f0; --muted:#94a3b8;
+    --ok:#22c55e; --bad:#ef4444; --accent:#38bdf8;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    display:flex; flex-direction:column; align-items:center; padding:20px;
+  }
+  h1{font-size:20px; margin:0 0 4px;}
+  .sub{color:var(--muted); font-size:13px; margin-bottom:14px; text-align:center;}
+  .wrap{display:flex; gap:20px; flex-wrap:wrap; justify-content:center; align-items:flex-start;}
+  #court-holder{background:var(--panel); border-radius:12px; padding:10px; box-shadow:0 8px 30px rgba(0,0,0,.35);}
+  .side{width:320px; max-width:90vw;}
+  .card{background:var(--panel); border-radius:12px; padding:16px; margin-bottom:14px;}
+  .status{display:flex; align-items:center; gap:10px; font-weight:600; font-size:16px;}
+  .dot{width:12px; height:12px; border-radius:50%;}
+  .legal .dot{background:var(--ok);} .legal{color:var(--ok);}
+  .illegal .dot{background:var(--bad);} .illegal{color:var(--bad);}
+  ul{margin:10px 0 0; padding-left:18px;}
+  li{margin:6px 0; font-size:13px; line-height:1.4; color:#fecaca;}
+  .legend{font-size:12px; color:var(--muted); line-height:1.5;}
+  button{
+    background:var(--accent); color:#04263a; border:none; border-radius:8px;
+    padding:10px 16px; font-size:14px; font-weight:700; cursor:pointer; width:100%;
+  }
+  button:hover{filter:brightness(1.08);}
+  .k{color:var(--ink); font-weight:600;}
+</style>
+</head>
+<body>
+  <h1>Volleyball Overlap / Rotation Trainer</h1>
+  <div class="sub">Referee's view &middot; net at the top. Drag players. Illegal positions turn red and are explained on the right.</div>
+  <div class="wrap">
+    <div id="court-holder"></div>
+    <div class="side">
+      <div class="card">
+        <div id="status" class="status legal"><span class="dot"></span><span id="status-text">Legal alignment</span></div>
+        <ul id="faults"></ul>
+      </div>
+      <div class="card">
+        <button id="reset">Reset to base rotation</button>
+      </div>
+      <div class="card legend">
+        <div class="k" style="color:var(--ink); margin-bottom:6px;">The overlap rules (at moment of serve)</div>
+        Front row = 4&nbsp;/&nbsp;3&nbsp;/&nbsp;2 (nearest net). Back row = 5&nbsp;/&nbsp;6&nbsp;/&nbsp;1.<br><br>
+        <span class="k">Left&ndash;right order</span><br>
+        Front: 4 left of 3, 3 left of 2.<br>
+        Back: 5 left of 6, 6 left of 1.<br><br>
+        <span class="k">Front behind back</span><br>
+        Each front player must be closer to the net than the back player behind them: 2 ahead of 1, 3 ahead of 6, 4 ahead of 5.<br><br>
+        The server (position 1) is exempt from overlap once the ball is contacted, but this trainer checks the pre-serve line-up.
+      </div>
+    </div>
+  </div>
+
+<script>
+// ---- Court geometry ----
+const W = 460, H = 500;
+const M = 40;                 // margin
+const NET_Y = M;              // net at top
+const R = 26;                 // player radius
+
+// Base positions (net at top). x rightward, y downward.
+// Columns: left, center, right.  Rows: front (near net), back (near baseline).
+const xLeft = M + 70, xCenter = W/2, xRight = W - M - 70;
+const yFront = M + 90, yBack = H - M - 70;
+
+const BASE = {
+  4: {x:xLeft,   y:yFront}, 3: {x:xCenter, y:yFront}, 2: {x:xRight, y:yFront},
+  5: {x:xLeft,   y:yBack},  6: {x:xCenter, y:yBack},  1: {x:xRight, y:yBack}
+};
+
+let players = {};
+let dragging = null;
+
+function resetPlayers(){
+  players = {};
+  for (const k in BASE) players[k] = {x:BASE[k].x, y:BASE[k].y};
+  evaluate();
+}
+
+// ---- Rule checking ----
+// Constraints compare player CENTERS. Each returns fault text + the two players involved.
+const CONSTRAINTS = [
+  // lateral, front row
+  {a:4,b:3, test:(a,b)=>a.x < b.x, msg:"Front row: player 4 must be LEFT of player 3"},
+  {a:3,b:2, test:(a,b)=>a.x < b.x, msg:"Front row: player 3 must be LEFT of player 2"},
+  // lateral, back row
+  {a:5,b:6, test:(a,b)=>a.x < b.x, msg:"Back row: player 5 must be LEFT of player 6"},
+  {a:6,b:1, test:(a,b)=>a.x < b.x, msg:"Back row: player 6 must be LEFT of player 1"},
+  // front ahead of back (closer to net = smaller y)
+  {a:2,b:1, test:(a,b)=>a.y < b.y, msg:"Right side: player 2 must be closer to the net than player 1"},
+  {a:3,b:6, test:(a,b)=>a.y < b.y, msg:"Center: player 3 must be closer to the net than player 6"},
+  {a:4,b:5, test:(a,b)=>a.y < b.y, msg:"Left side: player 4 must be closer to the net than player 5"},
+];
+
+let faults = [];      // list of message strings
+let badSet = new Set(); // player numbers that are illegal
+
+function evaluate(){
+  faults = [];
+  badSet = new Set();
+  for (const c of CONSTRAINTS){
+    const pa = players[c.a], pb = players[c.b];
+    if (!c.test(pa, pb)){
+      faults.push(c.msg);
+      badSet.add(c.a); badSet.add(c.b);
+    }
+  }
+  renderStatus();
+}
+
+function renderStatus(){
+  const status = document.getElementById('status');
+  const text = document.getElementById('status-text');
+  const list = document.getElementById('faults');
+  list.innerHTML = '';
+  if (faults.length === 0){
+    status.className = 'status legal';
+    text.textContent = 'Legal alignment';
+  } else {
+    status.className = 'status illegal';
+    text.textContent = faults.length + ' overlap fault' + (faults.length>1?'s':'');
+    for (const f of faults){
+      const li = document.createElement('li');
+      li.textContent = f;
+      list.appendChild(li);
+    }
+  }
+}
+
+// ---- Drawing ----
+function setup(){
+  const c = createCanvas(W, H);
+  c.parent('court-holder');
+  resetPlayers();
+  document.getElementById('reset').addEventListener('click', resetPlayers);
+}
+
+function draw(){
+  background('#1e293b');
+  drawCourt();
+  drawPlayers();
+}
+
+function drawCourt(){
+  // court floor
+  noStroke();
+  fill('#b45309');
+  rect(M, M, W-2*M, H-2*M, 6);
+  // playable inner
+  fill('#c2751a');
+  rect(M+6, M+6, W-2*M-12, H-2*M-12, 4);
+
+  // attack line (3m line) ~ 1/3 down from net
+  stroke('#fef3c7'); strokeWeight(2);
+  const attackY = M + (H-2*M)*0.34;
+  line(M+6, attackY, W-M-6, attackY);
+
+  // boundary lines
+  noFill(); strokeWeight(3); stroke('#fff8e7');
+  rect(M+6, M+6, W-2*M-12, H-2*M-12, 4);
+
+  // NET at top
+  strokeWeight(4); stroke('#e2e8f0');
+  line(M-4, NET_Y, W-M+4, NET_Y);
+  stroke('#64748b'); strokeWeight(1);
+  for (let x = M-4; x <= W-M+4; x += 10){
+    line(x, NET_Y-8, x, NET_Y);
+  }
+  noStroke(); fill('#e2e8f0'); textAlign(CENTER, BOTTOM); textSize(12);
+  text('NET', W/2, NET_Y-12);
+
+  // labels
+  fill('#78350f'); textSize(11); textAlign(CENTER, CENTER);
+  text('attack line', W/2, attackY-10);
+}
+
+function drawPlayers(){
+  textAlign(CENTER, CENTER);
+  for (const k of [1,2,3,4,5,6]){
+    const p = players[k];
+    const bad = badSet.has(Number(k));
+    // shadow
+    noStroke(); fill(0,0,0,60); ellipse(p.x+2, p.y+3, R*2);
+    // body
+    stroke(bad ? '#7f1d1d' : '#0c4a6e'); strokeWeight(3);
+    fill(bad ? '#ef4444' : '#38bdf8');
+    ellipse(p.x, p.y, R*2);
+    // number
+    noStroke(); fill(bad ? '#fff' : '#04263a');
+    textSize(20); textStyle(BOLD);
+    text(k, p.x, p.y+1);
+  }
+}
+
+// ---- Interaction ----
+function mousePressed(){
+  for (const k of [1,2,3,4,5,6]){
+    const p = players[k];
+    if (dist(mouseX, mouseY, p.x, p.y) <= R){
+      dragging = k; break;
+    }
+  }
+}
+function mouseDragged(){
+  if (dragging){
+    players[dragging].x = constrain(mouseX, M+R, W-M-R);
+    players[dragging].y = constrain(mouseY, NET_Y+R, H-M-R);
+    evaluate();
+  }
+}
+function mouseReleased(){ dragging = null; }
+
+// touch support
+function touchStarted(){ mousePressed(); }
+function touchMoved(){ mouseDragged(); return false; }
+function touchEnded(){ mouseReleased(); }
+</script>
+</body>
+</html>
