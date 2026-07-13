@@ -377,12 +377,20 @@ function attachExtras(playerRoot, num, figHalfDepth, figXCenter){
 //   6-2 -> two setters opposite each other, in positions 1 and 4
 const ROT_ORDER = [1, 6, 5, 4, 3, 2];
 const SETTER_START = { "5-1": [0], "6-2": [0, 3] }; // indices into ROT_ORDER
+const BACK_ROW = [1, 5, 6];
 let rotationSystem = "5-1";
 let rotationCount = 0; // 0..5
 function setterPositions(){
   return SETTER_START[rotationSystem].map(i => ROT_ORDER[(i + rotationCount) % 6]);
 }
 function isSetter(num){ return setterPositions().includes(num); }
+// Role of a setter: the active (back-row) setter is green; in a 6-2 the other
+// setter is up front and effectively subbed out of setting -> purple.
+// A 5-1 has a single setter, always green.
+function setterRole(num){
+  if (rotationSystem === "5-1") return "green";
+  return BACK_ROW.includes(num) ? "green" : "purple";
+}
 
 function applyPlayerColor(num){
   const p = players[num];
@@ -397,12 +405,15 @@ function applyPlayerColor(num){
     if (p.skinMat){ p.skinMat.diffuseColor = c; p.skinMat.emissiveColor = e; }
     if (p.origMats){ p.origMats.forEach(o => { if (o.mat.diffuseColor) o.mat.diffuseColor = c; o.mat.emissiveColor = e; }); }
   } else if (isSetter(num)){
-    // Setter -> green
-    p._haloMat.diffuseColor = BABYLON.Color3.FromHexString("#22c55e");
-    p._haloMat.emissiveColor = BABYLON.Color3.FromHexString("#14532d");
+    // Active setter -> green; off (front-row, 6-2) setter -> purple
+    const green = setterRole(num) === "green";
+    const hd = green ? "#22c55e" : "#a855f7";
+    const he = green ? "#14532d" : "#4c1d95";
+    p._haloMat.diffuseColor = BABYLON.Color3.FromHexString(hd);
+    p._haloMat.emissiveColor = BABYLON.Color3.FromHexString(he);
     p._numMats.forEach(m => m.diffuseTexture = p._okTex);
-    const c = BABYLON.Color3.FromHexString("#22c55e");
-    const e = BABYLON.Color3.FromHexString("#14532d");
+    const c = BABYLON.Color3.FromHexString(hd);
+    const e = BABYLON.Color3.FromHexString(he);
     if (p.skinMat){ p.skinMat.diffuseColor = c; p.skinMat.emissiveColor = e; }
     if (p.origMats){ p.origMats.forEach(o => { if (o.mat.diffuseColor) o.mat.diffuseColor = c; o.mat.emissiveColor = e; }); }
   } else {
