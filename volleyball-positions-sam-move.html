@@ -81,7 +81,7 @@
           <option value="6-2">6-2</option>
         </select>
         <button id="rotateBtn" title="Rotate setter(s) to the next position">Rotate 1/6</button>
-        <button id="idleBtn" title="Toggle natural idle movement of players">Idle: Off</button>
+        <button id="idleBtn" class="active" title="Toggle natural idle movement of players">Idle: On</button>
         <button id="reset">Reset</button>
       </div>
       <ul id="faults"></ul>
@@ -713,7 +713,7 @@ scene.onPointerObservable.add((pi) => {
 // hold, then step back home. The shuffle rides on playerRoot (so the whole
 // player actually moves on court) while overlap rules still use the logical
 // home x/z, so the line-up check is unaffected by idle shuffling.
-let idleOn = false;
+let idleOn = true;
 const idleState = {};
 function ensureIdleState(num){
   if (idleState[num]) return;

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Volleyball Overlap Trainer</title>
+<style>
+  :root{
+    --bg:#0f172a; --panel:#1e293b; --ink:#e2e8f0; --muted:#94a3b8;
+    --ok:#22c55e; --bad:#ef4444; --accent:#38bdf8;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    display:flex; flex-direction:column; align-items:center; padding:20px;
+  }
+  h1{font-size:22px; margin:0 0 4px;}
+  .sub{color:var(--muted); font-size:13px; margin-bottom:18px; text-align:center;}
+  .grid{
+    display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr));
+    gap:14px; width:100%; max-width:980px;
+  }
+  a.card{
+    display:block; text-decoration:none; color:inherit;
+    background:var(--panel); border:1px solid #334155; border-radius:10px;
+    padding:16px; transition:border-color .15s, transform .15s, background .15s;
+  }
+  a.card:hover{ border-color:var(--accent); transform:translateY(-2px); background:#243449; }
+  .card .name{ font-size:15px; font-weight:600; color:var(--ink); margin-bottom:4px; }
+  .card .tag{ font-size:11px; color:var(--accent); text-transform:uppercase; letter-spacing:.06em; margin-bottom:8px; }
+  .card .desc{ font-size:13px; color:var(--muted); line-height:1.45; }
+  .foot{ color:var(--muted); font-size:12px; margin-top:22px; text-align:center; }
+</style>
+</head>
+<body>
+  <h1>Volleyball Overlap / Rotation Trainer</h1>
+  <div class="sub">Choose a version to open.</div>
+
+  <div class="grid">
+
+    <a class="card" href="volleyball-positions.html">
+      <div class="tag">2D &middot; p5.js</div>
+      <div class="name">Original 2D</div>
+      <div class="desc">Referee's view with the net at the top. Drag players; illegal positions turn red and are explained on the side.</div>
+    </a>
+
+    <a class="card" href="volleyball-positions-3d.html">
+      <div class="tag">3D</div>
+      <div class="name">3D Court</div>
+      <div class="desc">Referee's view with the net at the far end. Drag players to move them; drag empty space to orbit.</div>
+    </a>
+
+    <a class="card" href="volleyball-positions-sam.html">
+      <div class="tag">3D &middot; Babylon.js</div>
+      <div class="name">Sam Rotate</div>
+      <div class="desc">Babylon.js 3D players build. Referee's view, net at the far end. Drag players; drag empty space to orbit.</div>
+    </a>
+
+    <a class="card" href="volleyball-positions-sam-move.html">
+      <div class="tag">3D &middot; Babylon.js</div>
+      <div class="name">Sam Rotate Idle</div>
+      <div class="desc">Babylon.js build with player movement. Referee's view, net at the far end. Drag players; drag empty space to orbit.</div>
+    </a>
+
+  </div>
+
+  <div class="foot">Pick a version above. Each opens in its own page.</div>
+</body>
+</html>
