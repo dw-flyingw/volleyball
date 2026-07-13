@@ -709,7 +709,7 @@ scene.onPointerObservable.add((pi) => {
 // amplitudes in/out so transitions never snap.
 //
 // On top of the in-place fidget, active players occasionally SHUFFLE: they
-// step out 1-2 ft in a random court direction (left/right/forward/back),
+  // step out 1-3 ft in a random court direction (left/right/forward/back),
 // hold, then step back home. The shuffle rides on playerRoot (so the whole
 // player actually moves on court) while overlap rules still use the logical
 // home x/z, so the line-up check is unaffected by idle shuffling.
@@ -760,12 +760,12 @@ function rollIdleState(st){
   rollMovement(st);
   st.nextSwitch = 1.5 + Math.random()*4.5;   // next change in 1.5-6s
 }
-// Pick a random shuffle target 1-2 ft (0.30-0.61m) away in any court direction
+// Pick a random shuffle target 1-3 ft (0.30-0.91m) away in any court direction
 // and clamp it so the player can't step off the court. Only the offset is set;
 // the home base (p.x/p.z) is untouched so overlap rules stay accurate.
 function startShuffle(st, p){
   const FT = 0.3048;
-  const dist = (1 + Math.random()) * FT;        // 1-2 ft
+  const dist = (1 + Math.random()*2) * FT;      // 1-3 ft
   const ang = Math.random()*Math.PI*2;
   const hw = COURT_W/2;
   const minX = -hw + PLAYER_R, maxX = hw - PLAYER_R;
@@ -831,7 +831,7 @@ engine.runRenderLoop(() => {
       p.figureNode.position.y = p.idleBasePosY + Math.sin(st.phaseBob)  * st.ampBob   * i;
       p.figureNode.position.x = Math.sin(st.phaseSway) * st.ampSway * i;
 
-      // Shuffle: active players occasionally step out 1-2 ft in a random court
+      // Shuffle: active players occasionally step out 1-3 ft in a random court
       // direction, hold, then step back home. Inactive players ease back home.
       if (st.active){
         st.nextShuffle -= dt;
@@ -851,7 +851,15 @@ engine.runRenderLoop(() => {
       const shEase = Math.min(1, dt * 1.8);
       st.shx += (st.targetShx - st.shx) * shEase;
       st.shz += (st.targetShz - st.shz) * shEase;
-      // Whole-player position = logical home + eased shuffle offset.
+      // Hard-clamp the eased offset so the player can never step through the
+      // net (z >= 0.5) or outside the court sidelines/back line. Keeps the
+      // figure in bounds even if the home spot sits on a boundary.
+      const hwC = COURT_W/2;
+      const offMinX = -hwC + PLAYER_R - p.x, offMaxX = hwC - PLAYER_R - p.x;
+      const offMinZ = 0.5 - p.z,             offMaxZ = COURT_D - PLAYER_R - p.z;
+      if (st.shx < offMinX) st.shx = offMinX; else if (st.shx > offMaxX) st.shx = offMaxX;
+      if (st.shz < offMinZ) st.shz = offMinZ; else if (st.shz > offMaxZ) st.shz = offMaxZ;
+      // Whole-player position = logical home + eased (clamped) shuffle offset.
       p.playerRoot.position.set(p.x + st.shx, 0, p.z + st.shz);
     }
   }
