@@ -37,17 +37,20 @@
   .spin{width:28px; height:28px; border:3px solid rgba(255,255,255,.2);
         border-top-color:var(--accent); border-radius:50%; animation:sp 0.8s linear infinite;}
   @keyframes sp{to{transform:rotate(360deg);}}
-  .panel{display:flex; gap:12px; padding:10px 12px; flex-shrink:0; flex-wrap:wrap; align-items:stretch;}
-  .card{background:var(--panel); border-radius:10px; padding:12px 14px; margin:0;}
-  .status-card{flex:0 0 280px; min-height:158px; display:flex; flex-direction:column;}
-  .reset-card{flex:0 0 200px; display:flex; flex-direction:column; align-items:stretch; min-height:158px;}
-  .legend-card{flex:1 1 360px; min-width:280px; min-height:158px;}
+  .panel{display:flex; gap:10px; padding:6px 12px; flex-shrink:0; flex-wrap:wrap; align-items:stretch;}
+  .card{background:var(--panel); border-radius:8px; padding:8px 12px; margin:0;}
+  .combined-card{flex:1 1 auto; display:flex; flex-direction:column; height:96px;}
+  .combined-row{display:flex; align-items:center; justify-content:space-between; gap:16px;}
+  .combined-row #status{flex:1 1 auto; font-size:13px;}
+  .combined-row button{width:auto; flex:0 0 auto; white-space:nowrap; padding:4px 10px; font-size:11px; border-radius:6px;}
+  .combined-row select{flex:0 0 auto; padding:4px 6px; background:#1a2434; color:#e2e8f0; border:1px solid #34465e; border-radius:6px; font-size:11px;}
+  .legend-card{flex:1 1 360px; min-width:280px; min-height:auto;}
   .status{display:flex; align-items:center; gap:10px; font-weight:600; font-size:15px;}
   .dot{width:12px; height:12px; border-radius:50%;}
   .legal .dot{background:var(--ok);} .legal{color:var(--ok);}
   .illegal .dot{background:var(--bad);} .illegal{color:var(--bad);}
-  ul{margin:8px 0 0; padding-left:18px; overflow-y:auto; flex:1 1 auto;}
-  li{margin:5px 0; font-size:12px; line-height:1.4; color:#fecaca;}
+  ul{margin:6px 0 0; padding-left:18px; overflow-y:auto; flex:1 1 auto;}
+  li{margin:3px 0; font-size:11px; line-height:1.35; color:#fecaca;}
   .legend-card{font-size:12px; color:var(--muted); line-height:1.5;}
   button{
     background:var(--accent); color:#04263a; border:none; border-radius:8px;
@@ -68,21 +71,19 @@
     <div class="hint">drag player = move · drag empty = orbit · scroll = zoom</div>
   </div>
   <div class="panel">
-    <div class="card status-card">
-      <div id="status" class="status legal"><span class="dot"></span><span id="status-text">Legal alignment</span></div>
+    <div class="card combined-card">
+      <div class="combined-row">
+        <div id="status" class="status legal"><span class="dot"></span><span id="status-text">Legal alignment</span></div>
+        <select id="rotationSystem" title="Rotation system — setters shown in green">
+          <option value="5-1" selected>5-1</option>
+          <option value="6-2">6-2</option>
+        </select>
+        <button id="rotateBtn" title="Rotate setter(s) to the next position">Rotate 1/6</button>
+        <button id="reset">Reset</button>
+      </div>
       <ul id="faults"></ul>
     </div>
-    <div class="card reset-card">
-      <button id="reset">Reset to base rotation</button>
-      <div style="margin-top:8px;">
-        <label for="playerModel" style="font-size:11px;color:#7c8a9a;display:block;margin-bottom:3px;">Player model</label>
-        <select id="playerModel" style="width:100%;padding:4px 6px;background:#1a2434;color:#e2e8f0;border:1px solid #34465e;border-radius:4px;font-size:12px;">
-          <option value="sam" selected>Sam</option>
-          <option value="man">Man</option>
-        </select>
-      </div>
-    </div>
-    <div class="card legend-card">
+    <div class="card legend-card" style="display:none;">
       <div class="k" style="margin-bottom:6px;">The overlap rules (at moment of serve)</div>
       Front row = 4&nbsp;/&nbsp;3&nbsp;/&nbsp;2 (nearest net). Back row = 5&nbsp;/&nbsp;6&nbsp;/&nbsp;1.<br><br>
       <span class="k">Left&ndash;right order</span><br>
@@ -130,8 +131,8 @@ function evaluate(){
     if (!c.test(pa, pb)){ faults.push(c.msg); badSet.add(c.a); badSet.add(c.b); }
   }
   for (const k of [1,2,3,4,5,6]){
-    const want = badSet.has(k);
-    if (players[k]._bad !== want){ players[k]._bad = want; applyBad(k, want); }
+    players[k]._bad = badSet.has(k);
+    applyPlayerColor(k);
   }
   renderStatus();
 }
@@ -369,40 +370,53 @@ function attachExtras(playerRoot, num, figHalfDepth, figXCenter){
   players[num]._badTex = badTex;
 }
 
-function applyBad(num, bad){
+// ---- Rotation system / setters ----
+// Court positions cycle clockwise each rotation: 1 -> 6 -> 5 -> 4 -> 3 -> 2 -> 1.
+// Base rotation (rotation 1) setter slots:
+//   5-1 -> single setter in position 1 (right back)
+//   6-2 -> two setters opposite each other, in positions 1 and 4
+const ROT_ORDER = [1, 6, 5, 4, 3, 2];
+const SETTER_START = { "5-1": [0], "6-2": [0, 3] }; // indices into ROT_ORDER
+let rotationSystem = "5-1";
+let rotationCount = 0; // 0..5
+function setterPositions(){
+  return SETTER_START[rotationSystem].map(i => ROT_ORDER[(i + rotationCount) % 6]);
+}
+function isSetter(num){ return setterPositions().includes(num); }
+
+function applyPlayerColor(num){
   const p = players[num];
   if (!p || !p._haloMat) return;
-  if (bad){
+  if (p._bad){
+    // Overlap fault -> red (takes priority over setter green)
     p._haloMat.diffuseColor = BABYLON.Color3.FromHexString("#ef4444");
     p._haloMat.emissiveColor = BABYLON.Color3.FromHexString("#7f1d1d");
     p._numMats.forEach(m => m.diffuseTexture = p._badTex);
-    const red = BABYLON.Color3.FromHexString("#ef4444");
-    const redE = BABYLON.Color3.FromHexString("#7f1d1d");
-    if (p.skinMat){
-      p.skinMat.diffuseColor = red;
-      p.skinMat.emissiveColor = redE;
-    }
-    if (p.origMats){
-      p.origMats.forEach(o => {
-        if (o.mat.diffuseColor) o.mat.diffuseColor = red;
-        o.mat.emissiveColor = redE;
-      });
-    }
+    const c = BABYLON.Color3.FromHexString("#ef4444");
+    const e = BABYLON.Color3.FromHexString("#7f1d1d");
+    if (p.skinMat){ p.skinMat.diffuseColor = c; p.skinMat.emissiveColor = e; }
+    if (p.origMats){ p.origMats.forEach(o => { if (o.mat.diffuseColor) o.mat.diffuseColor = c; o.mat.emissiveColor = e; }); }
+  } else if (isSetter(num)){
+    // Setter -> green
+    p._haloMat.diffuseColor = BABYLON.Color3.FromHexString("#22c55e");
+    p._haloMat.emissiveColor = BABYLON.Color3.FromHexString("#14532d");
+    p._numMats.forEach(m => m.diffuseTexture = p._okTex);
+    const c = BABYLON.Color3.FromHexString("#22c55e");
+    const e = BABYLON.Color3.FromHexString("#14532d");
+    if (p.skinMat){ p.skinMat.diffuseColor = c; p.skinMat.emissiveColor = e; }
+    if (p.origMats){ p.origMats.forEach(o => { if (o.mat.diffuseColor) o.mat.diffuseColor = c; o.mat.emissiveColor = e; }); }
   } else {
+    // Default -> blue / original
     p._haloMat.diffuseColor = BABYLON.Color3.FromHexString("#38bdf8");
     p._haloMat.emissiveColor = BABYLON.Color3.FromHexString("#155e75");
     p._numMats.forEach(m => m.diffuseTexture = p._okTex);
-    if (p.skinMat){
-      p.skinMat.diffuseColor = p.origColor;
-      p.skinMat.emissiveColor = p.origEmissive;
-    }
-    if (p.origMats){
-      p.origMats.forEach(o => {
-        if (o.diffuse && o.mat.diffuseColor) o.mat.diffuseColor = o.diffuse;
-        if (o.emissive !== null) o.mat.emissiveColor = o.emissive;
-      });
-    }
+    if (p.skinMat){ p.skinMat.diffuseColor = p.origColor; p.skinMat.emissiveColor = p.origEmissive; }
+    if (p.origMats){ p.origMats.forEach(o => { if (o.diffuse && o.mat.diffuseColor) o.mat.diffuseColor = o.diffuse; if (o.emissive !== null) o.mat.emissiveColor = o.emissive; }); }
   }
+}
+
+function refreshAllColors(){
+  for (const k of [1,2,3,4,5,6]) applyPlayerColor(k);
 }
 
 // ---- Set up one loaded figure as a player ----
@@ -484,7 +498,7 @@ function setupPlayerFromMeshes(rootNodes, num){
     console.log("  mesh", i, "material:", m.material ? m.material.name : "none", "hasNormals:", m.isVerticesDataPresent(BABYLON.VertexBuffer.NormalKind));
   });
 
-  // Collect all materials for tinting in applyBad (works for both models
+  // Collect all materials for tinting in applyPlayerColor (works for both models
   // with our skinMat and models with their own loaded materials like Sam).
   const meshMaterials = [];
   childMeshes.forEach(m => { if (m.material && !meshMaterials.includes(m.material)) meshMaterials.push(m.material); });
@@ -576,11 +590,6 @@ function loadPlayers(modelName){
 // Initial load with the default model.
 loadPlayers("sam");
 
-// Wire up the dropdown so the user can switch player models at runtime.
-document.getElementById("playerModel").addEventListener("change", (e) => {
-  loadPlayers(e.target.value);
-});
-
 // ---- Reset ----
 function resetPlayers(){
   for (const k of [1,2,3,4,5,6]){
@@ -592,6 +601,22 @@ function resetPlayers(){
   evaluate();
 }
 document.getElementById('reset').addEventListener('click', resetPlayers);
+
+// ---- Rotation system + setter rotation; setters shown in green ----
+function updateRotateLabel(){
+  document.getElementById('rotateBtn').textContent = "Rotate " + (rotationCount + 1) + "/6";
+}
+document.getElementById('rotationSystem').addEventListener('change', (e) => {
+  rotationSystem = e.target.value;
+  rotationCount = 0;      // back to base rotation on system change
+  updateRotateLabel();
+  refreshAllColors();
+});
+document.getElementById('rotateBtn').addEventListener('click', () => {
+  rotationCount = (rotationCount + 1) % 6;
+  updateRotateLabel();
+  refreshAllColors();
+});
 
 // ---- Drag interaction ----
 // Click a player = drag it. Click empty space = orbit. Auto-detected via pick.
