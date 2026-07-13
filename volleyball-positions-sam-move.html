@@ -1,0 +1,866 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Volleyball Overlap Trainer · Babylon 3D Players</title>
+<script src="https://cdn.babylonjs.com/babylon.js"></script>
+<script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+<style>
+  :root{
+    --bg:#0f172a; --panel:#1e293b; --ink:#e2e8f0; --muted:#94a3b8;
+    --ok:#22c55e; --bad:#ef4444; --accent:#38bdf8;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    display:flex; flex-direction:column; height:100vh; overflow:hidden;
+  }
+  header{padding:10px 16px 4px; text-align:center; flex-shrink:0;}
+  h1{font-size:18px; margin:0 0 2px;}
+  .sub{color:var(--muted); font-size:12px; margin:0;}
+  .stage{
+    flex:1 1 auto; position:relative; margin:6px 12px 0;
+    background:var(--panel); border-radius:12px;
+    box-shadow:0 8px 30px rgba(0,0,0,.35); overflow:hidden; min-height:0;
+  }
+  #renderCanvas{display:block; width:100%; height:100%; cursor:grab; touch-action:none; outline:none;}
+  #renderCanvas.dragging{cursor:grabbing;}
+  .hint{position:absolute; left:14px; bottom:12px; font-size:11px; color:var(--muted);
+        background:rgba(15,23,42,.6); padding:4px 8px; border-radius:6px; pointer-events:none;}
+  #loading{position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+           flex-direction:column; gap:10px; background:rgba(15,23,42,.75);
+           color:var(--ink); font-size:14px; pointer-events:none;}
+  #loading.hidden{display:none;}
+  .spin{width:28px; height:28px; border:3px solid rgba(255,255,255,.2);
+        border-top-color:var(--accent); border-radius:50%; animation:sp 0.8s linear infinite;}
+  @keyframes sp{to{transform:rotate(360deg);}}
+  .panel{position:absolute; top:12px; right:12px; z-index:10; display:flex; flex-direction:column; gap:10px; align-items:flex-end; max-width:340px;}
+  .card{background:var(--panel); border-radius:8px; padding:8px 12px; margin:0;}
+  .combined-card{display:flex; flex-direction:column; max-height:180px; width:320px;
+    background:rgba(20,29,47,.86); backdrop-filter:blur(6px); box-shadow:0 6px 20px rgba(0,0,0,.4);}
+  .combined-row{display:flex; align-items:center; justify-content:space-between; gap:16px;}
+  .combined-row #status{flex:1 1 auto; font-size:13px;}
+  .combined-row button{width:auto; flex:0 0 auto; white-space:nowrap; padding:4px 10px; font-size:11px; border-radius:6px;}
+  .combined-row select{flex:0 0 auto; padding:4px 6px; background:#1a2434; color:#e2e8f0; border:1px solid #34465e; border-radius:6px; font-size:11px;}
+  .legend-card{flex:1 1 360px; min-width:280px; min-height:auto;}
+  .status{display:flex; align-items:center; gap:10px; font-weight:600; font-size:15px;}
+  .dot{width:12px; height:12px; border-radius:50%;}
+  .legal .dot{background:var(--ok);} .legal{color:var(--ok);}
+  .illegal .dot{background:var(--bad);} .illegal{color:var(--bad);}
+  ul{margin:6px 0 0; padding-left:18px; overflow-y:auto; flex:1 1 auto;}
+  li{margin:3px 0; font-size:11px; line-height:1.35; color:#fecaca;}
+  .legend-card{font-size:12px; color:var(--muted); line-height:1.5;}
+  button{
+    background:var(--accent); color:#04263a; border:none; border-radius:8px;
+    padding:10px 16px; font-size:14px; font-weight:700; cursor:pointer; width:100%;
+  }
+  button:hover{filter:brightness(1.08);}
+  button.active{background:var(--ok); color:#04261a;}
+  button.active:hover{filter:brightness(1.05);}
+  .k{color:var(--ink); font-weight:600;}
+</style>
+</head>
+<body>
+  <header>
+    <h1>Volleyball Overlap / Rotation Trainer 3D</h1>
+    <div class="sub">Referee's view &middot; net at the far end. Drag players to move them; drag empty space to orbit.</div>
+  </header>
+  <div class="stage">
+    <canvas id="renderCanvas"></canvas>
+    <div id="loading"><div class="spin"></div><div>Loading player model…</div></div>
+    <div class="hint">drag player = move · drag empty = orbit · scroll = zoom · Idle = players fidget</div>
+  <div class="panel">
+    <div class="card combined-card">
+      <div class="combined-row">
+        <div id="status" class="status legal"><span class="dot"></span><span id="status-text">Legal alignment</span></div>
+        <select id="rotationSystem" title="Rotation system — setters shown in green">
+          <option value="5-1" selected>5-1</option>
+          <option value="6-2">6-2</option>
+        </select>
+        <button id="rotateBtn" title="Rotate setter(s) to the next position">Rotate 1/6</button>
+        <button id="idleBtn" title="Toggle natural idle movement of players">Idle: Off</button>
+        <button id="reset">Reset</button>
+      </div>
+      <ul id="faults"></ul>
+    </div>
+    <div class="card legend-card" style="display:none;">
+      <div class="k" style="margin-bottom:6px;">The overlap rules (at moment of serve)</div>
+      Front row = 4&nbsp;/&nbsp;3&nbsp;/&nbsp;2 (nearest net). Back row = 5&nbsp;/&nbsp;6&nbsp;/&nbsp;1.<br><br>
+      <span class="k">Left&ndash;right order</span><br>
+      Front: 4 left of 3, 3 left of 2.<br>
+      Back: 5 left of 6, 6 left of 1.<br><br>
+      <span class="k">Front behind back</span><br>
+      Each front player must be closer to the net than the back player behind them: 2 ahead of 1, 3 ahead of 6, 4 ahead of 5.<br><br>
+      The server (position 1) is exempt from overlap once the ball is contacted, but this trainer checks the pre-serve line-up.
+    </div>
+  </div>
+  </div>
+
+<script src="models.js"></script>
+<script>
+const COURT_W = 9, COURT_D = 9, NET_H = 2.43, ATTACK_Z = 3;
+const X_LEFT = -3, X_CENTER = 0, X_RIGHT = 3;
+const Z_FRONT = 2, Z_BACK = 7;
+const BASE = {
+  4:{x:X_LEFT,  z:Z_FRONT}, 3:{x:X_CENTER, z:Z_FRONT}, 2:{x:X_RIGHT, z:Z_FRONT},
+  5:{x:X_LEFT,  z:Z_BACK},  6:{x:X_CENTER, z:Z_BACK},  1:{x:X_RIGHT, z:Z_BACK}
+};
+const PLAYER_R = 0.45;
+const TARGET_H = 1.85;
+
+
+let players = {};
+let playerRoots = [];
+
+// ---- Rule checking (z replaces y; smaller z = closer to net) ----
+const CONSTRAINTS = [
+  {a:4,b:3, test:(a,b)=>a.x < b.x, msg:"Front row: player 4 must be LEFT of player 3"},
+  {a:3,b:2, test:(a,b)=>a.x < b.x, msg:"Front row: player 3 must be LEFT of player 2"},
+  {a:5,b:6, test:(a,b)=>a.x < b.x, msg:"Back row: player 5 must be LEFT of player 6"},
+  {a:6,b:1, test:(a,b)=>a.x < b.x, msg:"Back row: player 6 must be LEFT of player 1"},
+  {a:2,b:1, test:(a,b)=>a.z < b.z, msg:"Right side: player 2 must be closer to the net than player 1"},
+  {a:3,b:6, test:(a,b)=>a.z < b.z, msg:"Center: player 3 must be closer to the net than player 6"},
+  {a:4,b:5, test:(a,b)=>a.z < b.z, msg:"Left side: player 4 must be closer to the net than player 5"},
+];
+let faults = [], badSet = new Set();
+
+function evaluate(){
+  if ([1,2,3,4,5,6].some(k => !players[k])) return;
+  faults = []; badSet = new Set();
+  for (const c of CONSTRAINTS){
+    const pa = players[c.a], pb = players[c.b];
+    if (!c.test(pa, pb)){ faults.push(c.msg); badSet.add(c.a); badSet.add(c.b); }
+  }
+  for (const k of [1,2,3,4,5,6]){
+    players[k]._bad = badSet.has(k);
+    applyPlayerColor(k);
+  }
+  renderStatus();
+}
+
+function renderStatus(){
+  const status = document.getElementById('status');
+  const text = document.getElementById('status-text');
+  const list = document.getElementById('faults');
+  list.innerHTML = '';
+  if (faults.length === 0){
+    status.className = 'status legal';
+    text.textContent = 'Legal alignment';
+  } else {
+    status.className = 'status illegal';
+    text.textContent = faults.length + ' overlap fault' + (faults.length>1?'s':'');
+    for (const f of faults){
+      const li = document.createElement('li'); li.textContent = f; list.appendChild(li);
+    }
+  }
+}
+
+// ---- Babylon scene ----
+const canvas = document.getElementById('renderCanvas');
+const engine = new BABYLON.Engine(canvas, true, {preserveDrawingBuffer:true, stencil:true, antialias:true}, true);
+engine.setHardwareScalingLevel(1 / Math.min(window.devicePixelRatio || 1, 2));
+
+const scene = new BABYLON.Scene(engine);
+scene.useRightHandedSystem = true;
+scene.clearColor = new BABYLON.Color4(0.043, 0.075, 0.141, 1);
+scene.fogMode = BABYLON.Scene.FOGMODE_LINEAR;
+scene.fogColor = new BABYLON.Color3(0.043, 0.075, 0.141);
+scene.fogStart = 26; scene.fogEnd = 55;
+
+// Environment map for realistic PBR reflections (glossy floor, player materials)
+scene.environmentTexture = new BABYLON.CubeTexture(
+  "https://playground.babylonjs.com/textures/environment.env", scene);
+scene.environmentIntensity = 0.7;
+
+const camera = new BABYLON.ArcRotateCamera("cam", Math.PI/2, 1.02, 14.5,
+  new BABYLON.Vector3(0, 1.0, 4.5), scene);
+camera.minZ = 0.05;
+camera.lowerRadiusLimit = 7;
+camera.upperRadiusLimit = 30;
+camera.upperBetaLimit = Math.PI/2 - 0.04;
+camera.wheelPrecision = 25;
+camera.panningSensibility = 0;
+camera.attachControl(canvas, true);
+
+// Lights
+const hemi = new BABYLON.HemisphericLight("hemi", new BABYLON.Vector3(0.3, 1, 0.2), scene);
+hemi.intensity = 0.8;
+hemi.groundColor = new BABYLON.Color3(0.23, 0.16, 0.08);
+const sun = new BABYLON.DirectionalLight("sun", new BABYLON.Vector3(-6, -14, -4.5).normalize(), scene);
+sun.position = new BABYLON.Vector3(7, 15, 9);
+sun.intensity = 1.4;
+const shadowGen = new BABYLON.ShadowGenerator(2048, sun);
+shadowGen.usePoissonSampling = true;
+shadowGen.darkness = 0.45;
+shadowGen.bias = 0.0008;
+
+// ---- Surround floor ----
+const surround = BABYLON.MeshBuilder.CreateGround("surround", {width:64, height:64}, scene);
+surround.position.y = -0.12;
+const surrMat = new BABYLON.StandardMaterial("sm", scene);
+surrMat.diffuseColor = new BABYLON.Color3(0.10, 0.137, 0.212);
+surrMat.specularColor = new BABYLON.Color3(0.02,0.02,0.02);
+surround.material = surrMat;
+surround.receiveShadows = true;
+
+// ---- Court ----
+const lineMat = new BABYLON.StandardMaterial("line", scene);
+lineMat.diffuseColor = new BABYLON.Color3(1, 0.97, 0.91);
+lineMat.emissiveColor = new BABYLON.Color3(0.35, 0.34, 0.30);
+lineMat.specularColor = new BABYLON.Color3(0,0,0);
+
+function addLine(parent, x1,z1, x2,z2, w=0.12, y=0.04){
+  const dx=x2-x1, dz=z2-z1; const len=Math.hypot(dx,dz);
+  const m = BABYLON.MeshBuilder.CreateBox("l", {width:w, height:0.012, depth:len}, scene);
+  m.position.set((x1+x2)/2, y, (z1+z2)/2);
+  m.rotation.y = Math.atan2(dx, dz);
+  m.material = lineMat; m.receiveShadows = true; m.parent = parent;
+  return m;
+}
+
+// ---- Real hardwood textures (PBR) via jsDelivr, CORS-enabled ----
+const WOOD_BASE = "https://cdn.jsdelivr.net/gh/mrdoob/three.js@r160/examples/textures/hardwood2";
+
+function loadWoodTex(suffix, sU, sV){
+  const t = new BABYLON.Texture(WOOD_BASE + suffix, scene);
+  t.wrapU = BABYLON.Texture.WRAP_ADDRESSMODE;
+  t.wrapV = BABYLON.Texture.WRAP_ADDRESSMODE;
+  t.uScale = sU; t.vScale = sV;
+  return t;
+}
+// Tiling: court is 9m square. Plank strips run lengthwise (V = net-to-baseline).
+const TILE_U = 5, TILE_V = 5;
+const woodDiff  = loadWoodTex("_diffuse.jpg",  TILE_U, TILE_V);
+const woodRough = loadWoodTex("_roughness.jpg", TILE_U, TILE_V);
+const woodBump  = loadWoodTex("_bump.jpg",     TILE_U, TILE_V);
+
+const courtRoot = new BABYLON.TransformNode("court", scene);
+{
+  const plinth = BABYLON.MeshBuilder.CreateBox("plinth",
+    {width:COURT_W+1.2, height:0.12, depth:COURT_D+1.2}, scene);
+  plinth.position.set(0, -0.06, COURT_D/2); plinth.parent = courtRoot;
+  const pm = new BABYLON.PBRMaterial("pm", scene);
+  pm.albedoTexture = woodDiff;
+  pm.albedoColor = new BABYLON.Color3(0.42, 0.26, 0.14);   // dark walnut tint
+  pm.metallic = 0.0;
+  pm.roughness = 0.55;
+  pm.roughnessTexture = woodRough;
+  pm.bumpTexture = woodBump;
+  plinth.material = pm; plinth.receiveShadows = true;
+
+  const play = BABYLON.MeshBuilder.CreateBox("play",
+    {width:COURT_W, height:0.04, depth:COURT_D}, scene);
+  play.position.set(0, 0.01, COURT_D/2); play.parent = courtRoot;
+  const ym = new BABYLON.PBRMaterial("ym", scene);
+  ym.albedoTexture = woodDiff;
+  ym.albedoColor = new BABYLON.Color3(1.08, 1.02, 0.92);   // light maple tint
+  ym.metallic = 0.0;
+  ym.roughness = 0.28;                                      // glossy polyurethane
+  ym.roughnessTexture = woodRough;
+  ym.bumpTexture = woodBump;
+  play.material = ym; play.receiveShadows = true;
+
+  const hw = COURT_W/2;
+  addLine(courtRoot, -hw,0, hw,0, 0.12);
+  addLine(courtRoot, -hw,COURT_D, hw,COURT_D, 0.12);
+  addLine(courtRoot, -hw,0, -hw,COURT_D, 0.12);
+  addLine(courtRoot,  hw,0,  hw,COURT_D, 0.12);
+  addLine(courtRoot, -hw,ATTACK_Z, hw,ATTACK_Z, 0.10);
+}
+
+// ---- Net ----
+{
+  const g = new BABYLON.TransformNode("net", scene);
+  const hw = COURT_W/2;
+  const postMat = new BABYLON.StandardMaterial("post", scene);
+  postMat.diffuseColor = new BABYLON.Color3(0.12,0.16,0.22);
+  postMat.specularColor = new BABYLON.Color3(0.3,0.3,0.3);
+  for (const x of [-hw-0.05, hw+0.05]){
+    const post = BABYLON.MeshBuilder.CreateCylinder("post",
+      {height:NET_H+0.4, diameter:0.14}, scene);
+    post.position.set(x, (NET_H+0.4)/2, 0); post.material = postMat; post.parent = g;
+    shadowGen.addShadowCaster(post);
+  }
+  const tapeMat = new BABYLON.StandardMaterial("tape", scene);
+  tapeMat.diffuseColor = new BABYLON.Color3(0.97,0.98,0.99);
+  tapeMat.emissiveColor = new BABYLON.Color3(0.25,0.25,0.25);
+  for (const y of [NET_H, 0.06]){
+    const t = BABYLON.MeshBuilder.CreateBox("t",
+      {width:COURT_W+0.1, height:0.07, depth:0.05}, scene);
+    t.position.set(0, y, 0); t.material = tapeMat; t.parent = g;
+  }
+  // mesh grid
+  const segs = [];
+  for (let x=-hw; x<=hw+0.001; x+=0.3)
+    segs.push([new BABYLON.Vector3(x,0.07,0), new BABYLON.Vector3(x,NET_H-0.01,0)]);
+  for (let y=0.12; y<=NET_H-0.06; y+=0.22)
+    segs.push([new BABYLON.Vector3(-hw,y,0), new BABYLON.Vector3(hw,y,0)]);
+  const lines = BABYLON.MeshBuilder.CreateLineSystem("netlines", {lines:segs}, scene);
+  lines.color = new BABYLON.Color3(0.8,0.84,0.89);
+}
+
+// ---- Number textures + halo + jersey planes ----
+function makeNumberTexture(num, fg){
+  const size = 256;
+  const tex = new BABYLON.DynamicTexture("nt"+num+fg, {width:size, height:size}, scene, false);
+  const ctx = tex.getContext();
+  ctx.clearRect(0,0,size,size);
+  ctx.fillStyle = fg;
+  ctx.font = "bold 170px system-ui, sans-serif";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(String(num), size/2, size/2 + 8);
+  tex.update();
+  tex.hasAlpha = true;
+  return tex;
+}
+
+function attachExtras(playerRoot, num, figHalfDepth, figXCenter){
+  // ground halo — also serves as the main drag handle
+  const halo = BABYLON.MeshBuilder.CreateDisc("halo"+num, {radius:0.55, tessellation:48}, scene);
+  halo.rotation.x = Math.PI/2;
+  halo.position.y = 0.02;
+  halo.parent = playerRoot;
+  halo.isPickable = true;
+  halo.metadata = {isPlayer:true, num};
+  const haloMat = new BABYLON.StandardMaterial("hm"+num, scene);
+  haloMat.diffuseColor = BABYLON.Color3.FromHexString("#38bdf8");
+  haloMat.emissiveColor = BABYLON.Color3.FromHexString("#155e75");
+  haloMat.specularColor = new BABYLON.Color3(0,0,0);
+  haloMat.backFaceCulling = false;
+  halo.material = haloMat;
+
+  const okTex  = makeNumberTexture(num, "#ffffff");
+  const badTex = makeNumberTexture(num, "#ffffff");
+  const numMats = [];
+  const NUM_Z_TWEAK = 0.9;   // <1 = closer to body, >1 = further
+  const NUM_X_EXTRA = -0.08; // meters, negative = left
+  const zOff = ((figHalfDepth || 0.245) + 0.06) * NUM_Z_TWEAK;
+  const xOff = ((figXCenter || 0) * 1.8) + NUM_X_EXTRA;
+  const mkNumPlane = (z, ry) => {
+    const p = BABYLON.MeshBuilder.CreatePlane("num"+num, {width:0.40, height:0.40}, scene);
+    p.position.set(xOff, 1.42, z);
+    p.rotation.y = ry;
+    p.parent = playerRoot;
+    p.isPickable = false;
+    const m = new BABYLON.StandardMaterial("numm"+num, scene);
+    m.diffuseTexture = okTex;
+    m.emissiveColor = new BABYLON.Color3(0.85,0.85,0.85);
+    m.useAlphaFromDiffuseTexture = true;
+    m.backFaceCulling = false;
+    m.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
+    p.material = m;
+    numMats.push(m);
+  };
+  mkNumPlane( zOff, 0);          // +z side (referee's side, over the back)
+  mkNumPlane(-zOff, Math.PI);    // -z side
+
+  // Invisible pickable box around torso/back so the figure itself is grabbable.
+  // The man faces the net (-z), so his back is at +z (toward the referee).
+  const grab = BABYLON.MeshBuilder.CreateBox("grab"+num,
+    {width:0.7, height:1.5, depth:0.5}, scene);
+  grab.position.set(0, 0.9, 0);
+  grab.parent = playerRoot;
+  grab.isPickable = true;
+  grab.metadata = {isPlayer:true, num};
+  grab.visibility = 0;
+  grab.material = new BABYLON.StandardMaterial("grabm"+num, scene);
+
+  players[num]._haloMat = haloMat;
+  players[num]._numMats = numMats;
+  players[num]._okTex = okTex;
+  players[num]._badTex = badTex;
+}
+
+// ---- Rotation system / setters ----
+// Court positions cycle clockwise each rotation: 1 -> 6 -> 5 -> 4 -> 3 -> 2 -> 1.
+// Base rotation (rotation 1) setter slots:
+//   5-1 -> single setter in position 1 (right back)
+//   6-2 -> two setters opposite each other, in positions 1 and 4
+const ROT_ORDER = [1, 6, 5, 4, 3, 2];
+const SETTER_START = { "5-1": [0], "6-2": [0, 3] }; // indices into ROT_ORDER
+const BACK_ROW = [1, 5, 6];
+let rotationSystem = "5-1";
+let rotationCount = 0; // 0..5
+function setterPositions(){
+  return SETTER_START[rotationSystem].map(i => ROT_ORDER[(i + rotationCount) % 6]);
+}
+function isSetter(num){ return setterPositions().includes(num); }
+// Role of a setter: the active (back-row) setter is green; in a 6-2 the other
+// setter is up front and effectively subbed out of setting -> purple.
+// A 5-1 has a single setter, always green.
+function setterRole(num){
+  if (rotationSystem === "5-1") return "green";
+  return BACK_ROW.includes(num) ? "green" : "purple";
+}
+
+function applyPlayerColor(num){
+  const p = players[num];
+  if (!p || !p._haloMat) return;
+  if (p._bad){
+    // Overlap fault -> red (takes priority over setter green)
+    p._haloMat.diffuseColor = BABYLON.Color3.FromHexString("#ef4444");
+    p._haloMat.emissiveColor = BABYLON.Color3.FromHexString("#7f1d1d");
+    p._numMats.forEach(m => m.diffuseTexture = p._badTex);
+    const c = BABYLON.Color3.FromHexString("#ef4444");
+    const e = BABYLON.Color3.FromHexString("#7f1d1d");
+    if (p.skinMat){ p.skinMat.diffuseColor = c; p.skinMat.emissiveColor = e; }
+    if (p.origMats){ p.origMats.forEach(o => { if (o.mat.diffuseColor) o.mat.diffuseColor = c; o.mat.emissiveColor = e; }); }
+  } else if (isSetter(num)){
+    // Active setter -> green; off (front-row, 6-2) setter -> purple
+    const green = setterRole(num) === "green";
+    const hd = green ? "#22c55e" : "#a855f7";
+    const he = green ? "#14532d" : "#4c1d95";
+    p._haloMat.diffuseColor = BABYLON.Color3.FromHexString(hd);
+    p._haloMat.emissiveColor = BABYLON.Color3.FromHexString(he);
+    p._numMats.forEach(m => m.diffuseTexture = p._okTex);
+    const c = BABYLON.Color3.FromHexString(hd);
+    const e = BABYLON.Color3.FromHexString(he);
+    if (p.skinMat){ p.skinMat.diffuseColor = c; p.skinMat.emissiveColor = e; }
+    if (p.origMats){ p.origMats.forEach(o => { if (o.mat.diffuseColor) o.mat.diffuseColor = c; o.mat.emissiveColor = e; }); }
+  } else {
+    // Default -> blue / original
+    p._haloMat.diffuseColor = BABYLON.Color3.FromHexString("#38bdf8");
+    p._haloMat.emissiveColor = BABYLON.Color3.FromHexString("#155e75");
+    p._numMats.forEach(m => m.diffuseTexture = p._okTex);
+    if (p.skinMat){ p.skinMat.diffuseColor = p.origColor; p.skinMat.emissiveColor = p.origEmissive; }
+    if (p.origMats){ p.origMats.forEach(o => { if (o.diffuse && o.mat.diffuseColor) o.mat.diffuseColor = o.diffuse; if (o.emissive !== null) o.mat.emissiveColor = o.emissive; }); }
+  }
+}
+
+function refreshAllColors(){
+  for (const k of [1,2,3,4,5,6]) applyPlayerColor(k);
+}
+
+// ---- Set up one loaded figure as a player ----
+function setupPlayerFromMeshes(rootNodes, num){
+  // Find the __root__ transform that Babylon wraps glTF loads in. Parenting
+  // this (not the individual child meshes) preserves the skeleton bind pose.
+  let root = (rootNodes && rootNodes[0]) || null;
+  if (!root) throw new Error("no root node");
+
+  const playerRoot = new BABYLON.TransformNode("root_"+num, scene);
+  const figureNode = new BABYLON.TransformNode("fig_"+num, scene);
+  figureNode.parent = playerRoot;
+  root.parent = figureNode;
+
+  // Compute bounds from child meshes (TransformNode has no refreshBoundingInfo).
+  const childMeshes = figureNode.getChildMeshes(false);  // false = ALL descendants
+  let bbMin = new BABYLON.Vector3( Infinity,  Infinity,  Infinity);
+  let bbMax = new BABYLON.Vector3(-Infinity, -Infinity, -Infinity);
+  for (const m of childMeshes){
+    if (m.refreshBoundingInfo) m.refreshBoundingInfo(true);
+    const b = m.getHierarchyBoundingVectors();
+    bbMin = BABYLON.Vector3.Minimize(bbMin, b.min);
+    bbMax = BABYLON.Vector3.Maximize(bbMax, b.max);
+  }
+  const h = Math.max(bbMax.y - bbMin.y, 1e-4);
+  figureNode.scaling.setAll(TARGET_H / h);
+
+  // Recompute bounds after scaling, plant feet at y=0.
+  const s = TARGET_H / h;
+  figureNode.position.y = -bbMin.y * s;
+  // Face the net (-z). Man (from OBJ) faces +z so needs PI; Sam (glTF) faces -z.
+  figureNode.rotation.y = MODEL_FACING[currentModel] || 0;
+
+  // Compute figure half-depth in court-z direction *after* rotation+scaling,
+  // so number planes sit just outside the player's back/head rather than
+  // inside the mesh for wide models like Sam.
+  const ry = figureNode.rotation.y;
+  const cosR = Math.cos(ry), sinR = Math.sin(ry);
+  // Eight AABB corners in local figure space, scaled by s.
+  const corners = [];
+  for (const cx of [bbMin.x, bbMax.x]) for (const cy of [bbMin.y, bbMax.y]) for (const cz of [bbMin.z, bbMax.z]) {
+    corners.push([cx * s, cy * s, cz * s]);
+  }
+  let worldZMax = -Infinity, worldZMin = Infinity;
+  let worldXMax = -Infinity, worldXMin = Infinity;
+  for (const c of corners) {
+    const rx = cosR * c[0] + sinR * c[2];
+    const rz = -sinR * c[0] + cosR * c[2];
+    if (rz > worldZMax) worldZMax = rz;
+    if (rz < worldZMin) worldZMin = rz;
+    if (rx > worldXMax) worldXMax = rx;
+    if (rx < worldXMin) worldXMin = rx;
+  }
+  const figHalfDepth = Math.max(Math.abs(worldZMax), Math.abs(worldZMin), 0.13);
+  const figXCenter = (worldXMin + worldXMax) * 0.5;  // lean offset
+
+  // Tag EVERY mesh so raycasts reliably find this player.
+  // The man.glb GLB has no material, so assign a fresh one for tinting.
+  // Sam.glb has its own materials — keep them so Sam retains his colors.
+  let skinMat = null, origColor = null, origEmissive = null;
+  const hasOwnMaterial = childMeshes.some(m => m.material);
+  if (!hasOwnMaterial){
+    skinMat = new BABYLON.StandardMaterial("skin"+num, scene);
+    skinMat.diffuseColor = new BABYLON.Color3(0.5, 0.5, 0.5);
+    skinMat.specularColor = new BABYLON.Color3(0, 0, 0);
+    skinMat.backFaceCulling = false;
+    origColor = skinMat.diffuseColor.clone();
+    origEmissive = skinMat.emissiveColor.clone();
+  }
+
+  console.log("Player", num, "childMeshes:", childMeshes.length, "hasOwnMaterial:", hasOwnMaterial);
+  childMeshes.forEach((m, i) => {
+    m.metadata = {isPlayer:true, num};
+    m.isPickable = true;
+    if (skinMat) m.material = skinMat;
+    if (m.material) m.material.backFaceCulling = false;
+    shadowGen.addShadowCaster(m);
+    m.receiveShadows = true;
+    console.log("  mesh", i, "material:", m.material ? m.material.name : "none", "hasNormals:", m.isVerticesDataPresent(BABYLON.VertexBuffer.NormalKind));
+  });
+
+  // Collect all materials for tinting in applyPlayerColor (works for both models
+  // with our skinMat and models with their own loaded materials like Sam).
+  const meshMaterials = [];
+  childMeshes.forEach(m => { if (m.material && !meshMaterials.includes(m.material)) meshMaterials.push(m.material); });
+  const origMats = meshMaterials.map(m => ({ mat: m, diffuse: m.diffuseColor ? m.diffuseColor.clone() : null, emissive: m.emissiveColor ? m.emissiveColor.clone() : null }));
+
+  players[num] = {x:0, z:0, _bad:false, playerRoot, figureNode, skinMat, origColor, origEmissive, meshMaterials, origMats,
+    idleBaseRotY: figureNode.rotation.y, idleBasePosY: figureNode.position.y};
+  playerRoots.push(playerRoot);
+  attachExtras(playerRoot, num, figHalfDepth, figXCenter);
+}
+
+// ---- Fallback: simple primitive player (used only if the model fails to load) ----
+function fallbackPlayer(num){
+  const playerRoot = new BABYLON.TransformNode("fb_"+num, scene);
+  const body = BABYLON.MeshBuilder.CreateCapsule("b"+num, {radius:0.22, height:1.55}, scene);
+  body.position.y = 0.78; body.parent = playerRoot;
+  const bm = new BABYLON.StandardMaterial("bm"+num, scene);
+  bm.diffuseColor = BABYLON.Color3.FromHexString("#38bdf8");
+  body.material = bm; body.metadata = {isPlayer:true, num};
+  shadowGen.addShadowCaster(body);
+  const head = BABYLON.MeshBuilder.CreateSphere("h"+num, {diameter:0.30}, scene);
+  head.position.y = 1.72; head.parent = playerRoot;
+  const hm = new BABYLON.StandardMaterial("hm2"+num, scene);
+  hm.diffuseColor = new BABYLON.Color3(0.91,0.71,0.55);
+  head.material = hm; head.metadata = {isPlayer:true, num};
+  shadowGen.addShadowCaster(head);
+
+  players[num] = {x:0, z:0, _bad:false, playerRoot, _fbMat:bm};
+  playerRoots.push(playerRoot);
+  attachExtras(playerRoot, num);
+}
+
+// ---- Load all six players ----
+function onAllLoaded(){
+  document.getElementById('loading').classList.add('hidden');
+  resetPlayers();
+}
+
+// Load the model 6 times (one per player) — clone() fails on this GLB's
+// hierarchy, so independent loads are more robust. The blob URL is cached.
+BABYLON.SceneLoader.ShowLoadingScreen = false;
+const NUMS = [1,2,3,4,5,6];
+let loadedCount = 0;
+
+function onLoadError(num, msg, exc){
+  const detail = (exc && exc.message) ? exc.message : (msg || "unknown");
+  const full = "model load failed for player " + num + ": " + detail;
+  console.error(full, exc);
+  document.getElementById('loading').innerHTML = '<div style="color:#ef4444;padding:20px;font-size:12px;">'+full+'</div>';
+  document.getElementById('loading').classList.remove('hidden');
+  fallbackPlayer(num);
+  if (++loadedCount === NUMS.length) onAllLoaded();
+}
+
+function loadPlayers(modelName){
+  // Dispose any existing players (handles reset on model switch).
+  for (const root of playerRoots){
+    try { root.dispose(false, true); } catch(e){ console.warn("dispose", e); }
+  }
+  playerRoots = [];
+  for (const k in players) delete players[k];
+  loadedCount = 0;
+  currentModel = modelName;
+  document.getElementById("loading").classList.remove("hidden");
+  const url = MODELS[modelName] || MODEL_URL;
+  NUMS.forEach(num => {
+    BABYLON.SceneLoader.ImportMesh("", url, "", scene,
+      (meshes, _ps, _skel, animGroups) => {
+        if (animGroups) animGroups.forEach(g => g.stop());
+        let root = meshes[0];
+        while (root.parent) root = root.parent;
+        try {
+          setupPlayerFromMeshes([root], num);
+        } catch (e){
+          const msg = "setup error " + num + ": " + e.message;
+          console.error(msg, e);
+          document.getElementById('loading').innerHTML = '<div style="color:#ef4444;padding:20px;">'+msg+'</div>';
+          document.getElementById('loading').classList.remove('hidden');
+          fallbackPlayer(num);
+        }
+        if (++loadedCount === NUMS.length) onAllLoaded();
+      },
+      null,
+      (msg, exc) => onLoadError(num, msg, exc),
+      ".glb"
+    );
+  });
+}
+
+// Initial load with the default model.
+loadPlayers("sam");
+
+// ---- Reset ----
+function resetPlayers(){
+  for (const k of [1,2,3,4,5,6]){
+    if (!players[k]) continue;
+    players[k].x = BASE[k].x;
+    players[k].z = BASE[k].z;
+    players[k].playerRoot.position.set(BASE[k].x, 0, BASE[k].z);
+  }
+  evaluate();
+}
+document.getElementById('reset').addEventListener('click', resetPlayers);
+
+// ---- Rotation system + setter rotation; setters shown in green ----
+function updateRotateLabel(){
+  document.getElementById('rotateBtn').textContent = "Rotate " + (rotationCount + 1) + "/6";
+}
+document.getElementById('rotationSystem').addEventListener('change', (e) => {
+  rotationSystem = e.target.value;
+  rotationCount = 0;      // back to base rotation on system change
+  updateRotateLabel();
+  refreshAllColors();
+});
+document.getElementById('rotateBtn').addEventListener('click', () => {
+  rotationCount = (rotationCount + 1) % 6;
+  updateRotateLabel();
+  refreshAllColors();
+});
+
+// ---- Drag interaction ----
+// Click a player = drag it. Click empty space = orbit. Auto-detected via pick.
+let dragging = null;
+
+function pickPlayer(px, py){
+  return scene.pick(px, py, (mesh) => {
+    return mesh.isPickable !== false && mesh.metadata && mesh.metadata.isPlayer;
+  });
+}
+
+// Ground-plane (y=0) intersection via direct ray math.
+function groundHit(px, py){
+  const ray = scene.createPickingRay(px, py, BABYLON.Matrix.Identity(), camera);
+  if (Math.abs(ray.direction.y) < 1e-6) return null;
+  const t = -ray.origin.y / ray.direction.y;
+  if (t <= 0) return null;
+  return ray.origin.add(ray.direction.scale(t));
+}
+
+scene.onPointerObservable.add((pi) => {
+  if (pi.type === BABYLON.PointerEventTypes.POINTERDOWN){
+    const pick = pickPlayer(scene.pointerX, scene.pointerY);
+    console.log("DOWN pick hit:", pick && pick.hit, "at", scene.pointerX, scene.pointerY);
+    if (pick && pick.hit){
+      dragging = pick.pickedMesh.metadata.num;
+      console.log("Dragging player", dragging);
+      const dp = players[dragging];
+      if (dp && dp.figureNode && dp.idleBaseRotY !== undefined){
+        dp.figureNode.rotation.y = dp.idleBaseRotY;
+        dp.figureNode.position.y = dp.idleBasePosY;
+        dp.figureNode.position.x = 0;
+        // Cancel any in-progress shuffle so the drag starts/ends at the logical spot.
+        if (idleState[dragging]){
+          const s = idleState[dragging];
+          s.shx = 0; s.shz = 0; s.targetShx = 0; s.targetShz = 0; s.shuffling = false;
+        }
+        dp.playerRoot.position.set(dp.x, 0, dp.z);
+      }
+      camera.detachControl(canvas);
+      canvas.classList.add('dragging');
+    }
+  } else if (pi.type === BABYLON.PointerEventTypes.POINTERUP){
+    if (dragging){
+      console.log("UP, was dragging", dragging);
+      dragging = null;
+      canvas.classList.remove('dragging');
+      camera.attachControl(canvas, true);
+    }
+  } else if (pi.type === BABYLON.PointerEventTypes.POINTERMOVE){
+    if (!dragging){
+      const hover = pickPlayer(scene.pointerX, scene.pointerY);
+      canvas.style.cursor = (hover && hover.hit) ? 'grab' : '';
+      return;
+    }
+    const pt = groundHit(scene.pointerX, scene.pointerY);
+    if (pt){
+      const p = players[dragging];
+      const hw = COURT_W/2;
+      p.x = Math.max(-hw + PLAYER_R, Math.min(hw - PLAYER_R, pt.x));
+      p.z = Math.max(0.5, Math.min(COURT_D - PLAYER_R, pt.z));
+      p.playerRoot.position.set(p.x, 0, p.z);
+      evaluate();
+    }
+  }
+});
+
+// ---- Natural idle movement (simulate real players fidgeting) ----
+// Each player's whole movement style (energy, speed, amplitude) is re-rolled
+// every 1.5-6s, so a fast mover can become slow, a still player can wake up,
+// and the mix is never static. Energy (0..1) scales both speed and amplitude,
+// from near-still to quick lively fidgeting; ~20% of rolls force a breather
+// so even lively players sometimes stand still. A smoothed intensity eases
+// amplitudes in/out so transitions never snap.
+//
+// On top of the in-place fidget, active players occasionally SHUFFLE: they
+// step out 1-2 ft in a random court direction (left/right/forward/back),
+// hold, then step back home. The shuffle rides on playerRoot (so the whole
+// player actually moves on court) while overlap rules still use the logical
+// home x/z, so the line-up check is unaffected by idle shuffling.
+let idleOn = false;
+const idleState = {};
+function ensureIdleState(num){
+  if (idleState[num]) return;
+  idleState[num] = {
+    phaseTurn: Math.random()*Math.PI*2,
+    phaseBob:  Math.random()*Math.PI*2,
+    phaseSway: Math.random()*Math.PI*2,
+    active: false,
+    intensity: 0,
+    nextSwitch: 1.5 + Math.random()*4.5,
+    // shuffle state: whole-player step out and back, separate from in-place fidget
+    shx: 0, shz: 0,               // current eased offset on playerRoot (meters)
+    targetShx: 0, targetShz: 0,   // 0,0 = heading home; nonzero = stepping out
+    shuffling: false,             // true = currently stepping out to target
+    nextShuffle: 3 + Math.random()*5,  // seconds until the next shuffle attempt
+  };
+  // First movement style roll also decides whether they start active.
+  rollMovement(idleState[num]);
+  idleState[num].active = Math.random() < (0.25 + idleState[num].energy*0.6);
+  idleState[num].intensity = idleState[num].active ? 1 : 0;
+}
+// Re-roll a player's entire movement style: a new energy level drives new
+// random speeds and amplitudes. Called on init and every few seconds so a
+// player who was moving fast can become slow (or vice-versa) over time.
+function rollMovement(st){
+  // Energy 0..1, weighted toward calm so the team leans relaxed, with a few
+  // lively outliers. Low energy -> slow tiny moves, high -> fast big moves.
+  const energy = Math.pow(Math.random(), 1.6);
+  st.energy = energy;
+  st.speedTurn = 0.3 + energy*1.7 + Math.random()*0.25;
+  st.speedBob  = 0.7 + energy*2.0 + Math.random()*0.3;
+  st.speedSway = 0.25 + energy*1.3 + Math.random()*0.2;
+  st.ampTurn   = 0.05 + energy*0.28 + Math.random()*0.05;
+  st.ampBob    = 0.006 + energy*0.022 + Math.random()*0.004;
+  st.ampSway   = 0.015 + energy*0.09 + Math.random()*0.01;
+  // Occasionally (~20%) this cycle the player just stands still, regardless of
+  // energy, so even lively players take a breather and motion never feels uniform.
+  if (Math.random() < 0.2) st.active = false;
+}
+function rollIdleState(st){
+  // Re-roll who's a mover vs still (energetic players more often move), then
+  // reshuffle the actual movement style so speeds/amplitudes change over time.
+  st.active = Math.random() < (0.2 + st.energy*0.65);
+  rollMovement(st);
+  st.nextSwitch = 1.5 + Math.random()*4.5;   // next change in 1.5-6s
+}
+// Pick a random shuffle target 1-2 ft (0.30-0.61m) away in any court direction
+// and clamp it so the player can't step off the court. Only the offset is set;
+// the home base (p.x/p.z) is untouched so overlap rules stay accurate.
+function startShuffle(st, p){
+  const FT = 0.3048;
+  const dist = (1 + Math.random()) * FT;        // 1-2 ft
+  const ang = Math.random()*Math.PI*2;
+  const hw = COURT_W/2;
+  const minX = -hw + PLAYER_R, maxX = hw - PLAYER_R;
+  const minZ = 0.5, maxZ = COURT_D - PLAYER_R;
+  let tx = Math.cos(ang)*dist;
+  let tz = Math.sin(ang)*dist;
+  // Clamp the destination (not the offset) to court bounds, then back to offset.
+  const destX = Math.max(minX, Math.min(maxX, p.x + tx));
+  const destZ = Math.max(minZ, Math.min(maxZ, p.z + tz));
+  st.targetShx = destX - p.x;
+  st.targetShz = destZ - p.z;
+  st.shuffling = true;
+}
+function restoreIdleBase(){
+  for (const k of [1,2,3,4,5,6]){
+    const p = players[k];
+    if (!p || !p.figureNode || p.idleBaseRotY === undefined) continue;
+    p.figureNode.rotation.y = p.idleBaseRotY;
+    p.figureNode.position.y = p.idleBasePosY;
+    p.figureNode.position.x = 0;
+    // Snap whole player back to its logical home (cancels any shuffle offset).
+    p.playerRoot.position.set(p.x, 0, p.z);
+    if (idleState[k]){
+      const s = idleState[k];
+      s.intensity = 0; s.active = false;
+      s.shx = 0; s.shz = 0; s.targetShx = 0; s.targetShz = 0; s.shuffling = false;
+    }
+  }
+}
+function setIdle(on){
+  idleOn = on;
+  const btn = document.getElementById('idleBtn');
+  if (btn){ btn.textContent = 'Idle: ' + (on ? 'On' : 'Off'); btn.classList.toggle('active', on); }
+  if (!on) restoreIdleBase();
+}
+document.getElementById('idleBtn').addEventListener('click', () => setIdle(!idleOn));
+
+// ---- Render loop ----
+let lastT = performance.now();
+engine.runRenderLoop(() => {
+  const now = performance.now();
+  const dt = Math.min((now - lastT)/1000, 0.05);
+  lastT = now;
+  if (idleOn){
+    for (const k of [1,2,3,4,5,6]){
+      const p = players[k];
+      if (!p || !p.figureNode || p.idleBaseRotY === undefined) continue;
+      if (k === dragging){ continue; }          // don't fidget the player being dragged
+      ensureIdleState(k);
+      const st = idleState[k];
+      // Randomly toggle between moving and standing still.
+      st.nextSwitch -= dt;
+      if (st.nextSwitch <= 0) rollIdleState(st);
+      // Ease intensity toward target (1 if active, 0 if still) for smooth transitions.
+      const target = st.active ? 1 : 0;
+      st.intensity += (target - st.intensity) * Math.min(1, dt * 2.2);
+      // Always advance phases so motion resumes mid-cycle when a player wakes up.
+      st.phaseTurn += st.speedTurn * dt;
+      st.phaseBob  += st.speedBob  * dt;
+      st.phaseSway += st.speedSway * dt;
+      const i = st.intensity;
+      p.figureNode.rotation.y = p.idleBaseRotY + Math.sin(st.phaseTurn) * st.ampTurn  * i;
+      p.figureNode.position.y = p.idleBasePosY + Math.sin(st.phaseBob)  * st.ampBob   * i;
+      p.figureNode.position.x = Math.sin(st.phaseSway) * st.ampSway * i;
+
+      // Shuffle: active players occasionally step out 1-2 ft in a random court
+      // direction, hold, then step back home. Inactive players ease back home.
+      if (st.active){
+        st.nextShuffle -= dt;
+        if (st.nextShuffle <= 0){
+          if (!st.shuffling){
+            startShuffle(st, p);
+            st.nextShuffle = 1.2 + Math.random()*1.6;   // hold at the stepped-out spot
+          } else {
+            st.targetShx = 0; st.targetShz = 0; st.shuffling = false;
+            st.nextShuffle = 3 + Math.random()*5;        // rest at home before next shuffle
+          }
+        }
+      } else {
+        st.targetShx = 0; st.targetShz = 0; st.shuffling = false;
+      }
+      // Ease the shuffle offset toward its target at a stepping pace.
+      const shEase = Math.min(1, dt * 1.8);
+      st.shx += (st.targetShx - st.shx) * shEase;
+      st.shz += (st.targetShz - st.shz) * shEase;
+      // Whole-player position = logical home + eased shuffle offset.
+      p.playerRoot.position.set(p.x + st.shx, 0, p.z + st.shz);
+    }
+  }
+  scene.render();
+});
+const ro = new ResizeObserver(() => engine.resize());
+ro.observe(document.querySelector('.stage'));
+window.addEventListener('resize', () => engine.resize());
+engine.resize();
+</script>
+</body>
+</html>
