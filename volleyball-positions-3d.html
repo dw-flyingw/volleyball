@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Volleyball Overlap Trainer · 3D</title>
+<style>
+  :root{
+    --bg:#0f172a; --panel:#1e293b; --ink:#e2e8f0; --muted:#94a3b8;
+    --ok:#22c55e; --bad:#ef4444; --accent:#38bdf8;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    display:flex; flex-direction:column; align-items:center; padding:20px;
+  }
+  h1{font-size:20px; margin:0 0 4px;}
+  .sub{color:var(--muted); font-size:13px; margin-bottom:14px; text-align:center;}
+  .wrap{display:flex; gap:20px; flex-wrap:wrap; justify-content:center; align-items:flex-start;}
+  #court-holder{
+    background:var(--panel); border-radius:12px; padding:10px;
+    box-shadow:0 8px 30px rgba(0,0,0,.35); position:relative;
+  }
+  #three-canvas{display:block; border-radius:8px; cursor:grab;}
+  #three-canvas.dragging{cursor:grabbing;}
+  .hint{position:absolute; left:18px; bottom:16px; font-size:11px; color:var(--muted);
+        background:rgba(15,23,42,.6); padding:4px 8px; border-radius:6px; pointer-events:none;}
+  .side{width:320px; max-width:90vw;}
+  .card{background:var(--panel); border-radius:12px; padding:16px; margin-bottom:14px;}
+  .status{display:flex; align-items:center; gap:10px; font-weight:600; font-size:16px;}
+  .dot{width:12px; height:12px; border-radius:50%;}
+  .legal .dot{background:var(--ok);} .legal{color:var(--ok);}
+  .illegal .dot{background:var(--bad);} .illegal{color:var(--bad);}
+  ul{margin:10px 0 0; padding-left:18px;}
+  li{margin:6px 0; font-size:13px; line-height:1.4; color:#fecaca;}
+  .legend{font-size:12px; color:var(--muted); line-height:1.5;}
+  button{
+    background:var(--accent); color:#04263a; border:none; border-radius:8px;
+    padding:10px 16px; font-size:14px; font-weight:700; cursor:pointer; width:100%;
+  }
+  button:hover{filter:brightness(1.08);}
+  .k{color:var(--ink); font-weight:600;}
+</style>
+</head>
+<body>
+  <h1>Volleyball Overlap / Rotation Trainer — 3D</h1>
+  <div class="sub">Referee's view &middot; net at the far end. Drag players to move them; drag empty space to orbit.</div>
+  <div class="wrap">
+    <div id="court-holder">
+      <div id="three-canvas"></div>
+      <div class="hint">drag player = move · drag empty = orbit · scroll = zoom</div>
+    </div>
+    <div class="side">
+      <div class="card">
+        <div id="status" class="status legal"><span class="dot"></span><span id="status-text">Legal alignment</span></div>
+        <ul id="faults"></ul>
+      </div>
+      <div class="card">
+        <button id="reset">Reset to base rotation</button>
+      </div>
+      <div class="card legend">
+        <div class="k" style="color:var(--ink); margin-bottom:6px;">The overlap rules (at moment of serve)</div>
+        Front row = 4&nbsp;/&nbsp;3&nbsp;/&nbsp;2 (nearest net). Back row = 5&nbsp;/&nbsp;6&nbsp;/&nbsp;1.<br><br>
+        <span class="k">Left&ndash;right order</span><br>
+        Front: 4 left of 3, 3 left of 2.<br>
+        Back: 5 left of 6, 6 left of 1.<br><br>
+        <span class="k">Front behind back</span><br>
+        Each front player must be closer to the net than the back player behind them: 2 ahead of 1, 3 ahead of 6, 4 ahead of 5.<br><br>
+        The server (position 1) is exempt from overlap once the ball is contacted, but this trainer checks the pre-serve line-up.
+      </div>
+    </div>
+  </div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ---- Court geometry (meters). Net at z=0, baseline at z=COURT_D. x lateral. ----
+const COURT_W = 9;
+const COURT_D = 9;
+const NET_H   = 2.43;
+const ATTACK_Z = 3;
+
+const X_LEFT = -3, X_CENTER = 0, X_RIGHT = 3;
+const Z_FRONT = 2, Z_BACK = 7;
+
+const BASE = {
+  4: {x:X_LEFT,   z:Z_FRONT}, 3: {x:X_CENTER, z:Z_FRONT}, 2: {x:X_RIGHT, z:Z_FRONT},
+  5: {x:X_LEFT,   z:Z_BACK},  6: {x:X_CENTER, z:Z_BACK},  1: {x:X_RIGHT, z:Z_BACK}
+};
+
+let players = {};
+
+// ---- Rule checking (same logic as 2D; z replaces y, smaller z = closer to net) ----
+const CONSTRAINTS = [
+  {a:4,b:3, test:(a,b)=>a.x < b.x, msg:"Front row: player 4 must be LEFT of player 3"},
+  {a:3,b:2, test:(a,b)=>a.x < b.x, msg:"Front row: player 3 must be LEFT of player 2"},
+  {a:5,b:6, test:(a,b)=>a.x < b.x, msg:"Back row: player 5 must be LEFT of player 6"},
+  {a:6,b:1, test:(a,b)=>a.x < b.x, msg:"Back row: player 6 must be LEFT of player 1"},
+  {a:2,b:1, test:(a,b)=>a.z < b.z, msg:"Right side: player 2 must be closer to the net than player 1"},
+  {a:3,b:6, test:(a,b)=>a.z < b.z, msg:"Center: player 3 must be closer to the net than player 6"},
+  {a:4,b:5, test:(a,b)=>a.z < b.z, msg:"Left side: player 4 must be closer to the net than player 5"},
+];
+
+let faults = [];
+let badSet = new Set();
+
+function evaluate(){
+  faults = [];
+  badSet = new Set();
+  for (const c of CONSTRAINTS){
+    const pa = players[c.a], pb = players[c.b];
+    if (!c.test(pa, pb)){
+      faults.push(c.msg);
+      badSet.add(c.a); badSet.add(c.b);
+    }
+  }
+  // sync per-player visuals
+  for (const k of [1,2,3,4,5,6]){
+    const want = badSet.has(k);
+    if (players[k]._bad !== want){
+      players[k]._bad = want;
+      applyBad(k, want);
+    }
+  }
+  renderStatus();
+}
+
+function renderStatus(){
+  const status = document.getElementById('status');
+  const text = document.getElementById('status-text');
+  const list = document.getElementById('faults');
+  list.innerHTML = '';
+  if (faults.length === 0){
+    status.className = 'status legal';
+    text.textContent = 'Legal alignment';
+  } else {
+    status.className = 'status illegal';
+    text.textContent = faults.length + ' overlap fault' + (faults.length>1?'s':'');
+    for (const f of faults){
+      const li = document.createElement('li');
+      li.textContent = f;
+      list.appendChild(li);
+    }
+  }
+}
+
+// ---- three.js scene ----
+const container = document.getElementById('three-canvas');
+const CW = 600, CH = 540;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b1324);
+scene.fog = new THREE.Fog(0x0b1324, 22, 45);
+
+const camera = new THREE.PerspectiveCamera(45, CW/CH, 0.1, 200);
+camera.position.set(0, 7.5, 12.5);
+
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(CW, CH);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+container.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0.2, 4.5);
+controls.enablePan = false;
+controls.minDistance = 6;
+controls.maxDistance = 26;
+controls.maxPolarAngle = Math.PI * 0.49;
+controls.update();
+
+// ---- Lights ----
+scene.add(new THREE.HemisphereLight(0xbfe3ff, 0x3a2a14, 0.55));
+scene.add(new THREE.AmbientLight(0xffffff, 0.18));
+const sun = new THREE.DirectionalLight(0xffffff, 1.15);
+sun.position.set(6, 13, 7);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -8; sun.shadow.camera.right = 8;
+sun.shadow.camera.top = 12;  sun.shadow.camera.bottom = -2;
+sun.shadow.camera.near = 0.5; sun.shadow.camera.far = 40;
+sun.shadow.bias = -0.0004;
+scene.add(sun);
+scene.add(sun.target);
+
+// ---- Surround floor ----
+const surround = new THREE.Mesh(
+  new THREE.CircleGeometry(30, 64),
+  new THREE.MeshStandardMaterial({color:0x1a2336, roughness:0.95})
+);
+surround.rotation.x = -Math.PI/2;
+surround.position.y = -0.12;
+surround.receiveShadow = true;
+scene.add(surround);
+
+// ---- Court ----
+const lineMat = new THREE.MeshStandardMaterial({color:0xfff8e7, roughness:0.6});
+
+function addLine(group, x1, z1, x2, z2, w=0.1, y=0.032){
+  const dx = x2-x1, dz = z2-z1;
+  const len = Math.hypot(dx, dz);
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, 0.012, len), lineMat);
+  m.position.set((x1+x2)/2, y, (z1+z2)/2);
+  m.rotation.y = Math.atan2(dx, dz);
+  m.receiveShadow = true;
+  group.add(m);
+}
+
+function createCourt(){
+  const g = new THREE.Group();
+
+  // outer plinth
+  const plinth = new THREE.Mesh(
+    new THREE.BoxGeometry(COURT_W + 1.2, 0.12, COURT_D + 1.2),
+    new THREE.MeshStandardMaterial({color:0x3a2410, roughness:0.9})
+  );
+  plinth.position.set(0, -0.06, COURT_D/2);
+  plinth.receiveShadow = true;
+  g.add(plinth);
+
+  // playing surface
+  const play = new THREE.Mesh(
+    new THREE.BoxGeometry(COURT_W, 0.04, COURT_D),
+    new THREE.MeshStandardMaterial({color:0xc2751a, roughness:0.82})
+  );
+  play.position.set(0, 0.01, COURT_D/2);
+  play.receiveShadow = true;
+  g.add(play);
+
+  const hw = COURT_W/2;
+  // boundary lines
+  addLine(g, -hw, 0,  hw, 0, 0.12, 0.04);     // center line (under net)
+  addLine(g, -hw, COURT_D, hw, COURT_D, 0.12); // baseline
+  addLine(g, -hw, 0, -hw, COURT_D, 0.12);     // left sideline
+  addLine(g,  hw, 0,  hw, COURT_D, 0.12);     // right sideline
+  // attack line (3m from net)
+  addLine(g, -hw, ATTACK_Z, hw, ATTACK_Z, 0.10, 0.04);
+
+  return g;
+}
+scene.add(createCourt());
+
+// ---- Net ----
+function createNet(){
+  const g = new THREE.Group();
+  const hw = COURT_W/2;
+
+  // posts
+  const postMat = new THREE.MeshStandardMaterial({color:0x1f2937, metalness:0.3, roughness:0.6});
+  const postGeo = new THREE.CylinderGeometry(0.07, 0.07, NET_H + 0.4, 12);
+  for (const x of [-hw - 0.05, hw + 0.05]){
+    const post = new THREE.Mesh(postGeo, postMat);
+    post.position.set(x, (NET_H + 0.4)/2, 0);
+    post.castShadow = true;
+    g.add(post);
+  }
+
+  // top + bottom white tapes
+  const tapeMat = new THREE.MeshStandardMaterial({color:0xf8fafc, roughness:0.5});
+  const tapeGeo = new THREE.BoxGeometry(COURT_W + 0.1, 0.07, 0.05);
+  const top = new THREE.Mesh(tapeGeo, tapeMat);
+  top.position.set(0, NET_H, 0); g.add(top);
+  const bot = new THREE.Mesh(tapeGeo, tapeMat);
+  bot.position.set(0, 0.06, 0); g.add(bot);
+
+  // net mesh grid
+  const netPts = [];
+  for (let x = -hw; x <= hw + 0.001; x += 0.3){
+    netPts.push(x, 0.07, 0, x, NET_H - 0.01, 0);
+  }
+  for (let y = 0.12; y <= NET_H - 0.06; y += 0.22){
+    netPts.push(-hw, y, 0, hw, y, 0);
+  }
+  const nGeo = new THREE.BufferGeometry();
+  nGeo.setAttribute('position', new THREE.Float32BufferAttribute(netPts, 3));
+  g.add(new THREE.LineSegments(nGeo, new THREE.LineBasicMaterial({color:0xcdd6e3})));
+
+  return g;
+}
+scene.add(createNet());
+
+// ---- Players ----
+function makeNumberTexture(num, fg){
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, 128, 128);
+  ctx.fillStyle = fg;
+  ctx.font = 'bold 86px system-ui, sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(String(num), 64, 70);
+  const t = new THREE.CanvasTexture(c);
+  t.anisotropy = 8;
+  return t;
+}
+
+const PLAYER_R = 0.5;
+const playerMeshes = [];
+
+function createPlayer(num){
+  const okTex   = makeNumberTexture(num, '#ffffff');
+  const badTex  = makeNumberTexture(num, '#ffffff');
+
+  const sideMat  = new THREE.MeshStandardMaterial({color:0x38bdf8, roughness:0.45, metalness:0.1});
+  const topMat   = new THREE.MeshStandardMaterial({color:0x7dd3fc, roughness:0.5});
+  const baseMat  = new THREE.MeshStandardMaterial({color:0x0c4a6e, roughness:0.6});
+
+  const mesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(PLAYER_R, PLAYER_R, 0.3, 36),
+    [sideMat, topMat, baseMat]
+  );
+  mesh.position.y = 0.17;
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  mesh.userData.num = num;
+
+  const ringMat = new THREE.MeshStandardMaterial({color:0x0c4a6e, roughness:0.5});
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(PLAYER_R + 0.04, 0.035, 10, 40), ringMat);
+  ring.rotation.x = Math.PI/2;
+  ring.position.y = 0.03;
+
+  // Number label: flat plane just above the cap, laid face-up so the glyph reads
+  // upright to the referee camera (+z, looking toward -z). A 2D plane with default
+  // UVs has its top edge at local +Y; rotating -90° about X sends +Y to -z (far/net,
+  // which renders at the top of the screen), making the digit upright, not mirrored.
+  const numMat = new THREE.MeshBasicMaterial({map: okTex, transparent:true, depthWrite:false});
+  const numPlane = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.62), numMat);
+  numPlane.rotation.x = -Math.PI/2;
+  numPlane.position.y = 0.34;
+
+  const group = new THREE.Group();
+  group.add(mesh); group.add(ring); group.add(numPlane);
+  scene.add(group);
+
+  players[num] = {x:0, z:0, _bad:false, group, mesh, ring, numMat, okTex, badTex,
+                  sideMat, topMat, baseMat, ringMat};
+  playerMeshes.push(mesh);
+}
+
+function applyBad(num, bad){
+  const p = players[num];
+  if (bad){
+    p.sideMat.color.setHex(0xef4444);
+    p.topMat.color.setHex(0xfca5a5);
+    p.baseMat.color.setHex(0x7f1d1d);
+    p.ringMat.color.setHex(0x7f1d1d);
+    p.numMat.map = p.badTex;
+  } else {
+    p.sideMat.color.setHex(0x38bdf8);
+    p.topMat.color.setHex(0x7dd3fc);
+    p.baseMat.color.setHex(0x0c4a6e);
+    p.ringMat.color.setHex(0x0c4a6e);
+    p.numMat.map = p.okTex;
+  }
+  p.numMat.needsUpdate = true;
+}
+
+function updatePlayerPosition(num){
+  const p = players[num];
+  p.group.position.set(p.x, 0, p.z);
+}
+
+// ---- Reset ----
+function resetPlayers(){
+  for (const k of [1,2,3,4,5,6]){
+    const b = BASE[k];
+    players[k].x = b.x;
+    players[k].z = b.z;
+    updatePlayerPosition(k);
+  }
+  evaluate();
+}
+
+// build players
+for (const k of [1,2,3,4,5,6]) createPlayer(k);
+resetPlayers();
+
+document.getElementById('reset').addEventListener('click', resetPlayers);
+
+// ---- Drag interaction ----
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+const dragPlane = new THREE.Plane(new THREE.Vector3(0,1,0), 0);
+const dragHit = new THREE.Vector3();
+let dragging = null;
+
+function setPointer(e){
+  const r = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((e.clientX - r.left)/r.width)*2 - 1;
+  pointer.y = -((e.clientY - r.top)/r.height)*2 + 1;
+}
+
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  setPointer(e);
+  raycaster.setFromCamera(pointer, camera);
+  const hits = raycaster.intersectObjects(playerMeshes, false);
+  if (hits.length){
+    dragging = hits[0].object.userData.num;
+    controls.enabled = false;
+    renderer.domElement.classList.add('dragging');
+    renderer.domElement.setPointerCapture(e.pointerId);
+  }
+});
+
+renderer.domElement.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  setPointer(e);
+  raycaster.setFromCamera(pointer, camera);
+  if (raycaster.ray.intersectPlane(dragPlane, dragHit)){
+    const p = players[dragging];
+    const hw = COURT_W/2;
+    p.x = THREE.MathUtils.clamp(dragHit.x, -hw + PLAYER_R, hw - PLAYER_R);
+    p.z = THREE.MathUtils.clamp(dragHit.z, 0.35, COURT_D - PLAYER_R);
+    updatePlayerPosition(dragging);
+    evaluate();
+  }
+});
+
+function endDrag(){ dragging = null; controls.enabled = true; renderer.domElement.classList.remove('dragging'); }
+renderer.domElement.addEventListener('pointerup', endDrag);
+renderer.domElement.addEventListener('pointercancel', endDrag);
+
+// ---- Render loop ----
+function animate(){
+  controls.update();
+  renderer.render(scene, camera);
+  requestAnimationFrame(animate);
+}
+animate();
+
+// ---- Resize ----
+function resize(){
+  const w = Math.min(600, container.parentElement.clientWidth - 20);
+  // keep fixed aspect for simplicity
+  renderer.setSize(CW, CH);
+  camera.aspect = CW/CH;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+</script>
+</body>
+</html>
